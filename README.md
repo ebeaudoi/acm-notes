@@ -1,194 +1,197 @@
-===============================================================================
-               RED HAT ADVANCED CLUSTER MANAGEMENT (ACM) NOTES
-===============================================================================
-
--------------------------------------------------------------------------------
-1. TOOL INSTALLATION & SETUP
--------------------------------------------------------------------------------
-
-1.1 Install Kustomize
----------------------
-Ref: https://kubectl.docs.kubernetes.io/installation/kustomize/binaries/
-Command:
-  curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
-
-1.2 Install PolicyGenerator
----------------------------
-Ref: https://github.com/stolostron/policy-generator-plugin#installation
-Download: https://github.com/open-cluster-management-io/policy-generator-plugin/releases/tag/v1.19.0
-
-Commands:
-  chmod +x linux-amd64-PolicyGenerator
-  mv linux-amd64-PolicyGenerator ${HOME}/.config/kustomize/plugin/policy.open-cluster-management.io/v1/policygenerator/PolicyGenerator
-  # or
-  sudo cp linux-amd64-PolicyGenerator /usr/local/bin/PolicyGenerator
-
-
--------------------------------------------------------------------------------
-2. CLUSTER REMOVAL & DETACHMENT PROCEDURES
--------------------------------------------------------------------------------
-
-2.1 Hub Self-Management Warning Note
-------------------------------------
-If you attempt to detach the hub cluster, which is named "local-cluster", be aware
-that the default setting of disableHubSelfManagement is false. This setting 
-causes the hub cluster to reimport itself and manage itself when it is detached 
-and it reconciles the MultiClusterHub controller. It might take hours for the hub 
-cluster to complete the detachment process and reimport.
-
-2.2 Remove a Cluster in ACM 2.1
--------------------------------
-* Command Line Removal:
-    oc delete managedcluster $CLUSTER_NAME
-
-* Console Removal:
-    1. From the navigation menu, navigate to Infrastructure > Clusters.
-    2. Select the option menu beside the cluster that you want to remove from management.
-    3. Select "Destroy cluster" or "Detach cluster".
-
-* Remove Remaining Resources After Removal:
-    1. Check for remaining namespaces:
-         oc get ns | grep open-cluster-management-agent
-       Output should show two namespaces:
-         open-cluster-management-agent         Active   10m
-         open-cluster-management-agent-addon   Active   10m
-
-    2. Download the cleanup-managed-cluster script from the deploy Git repository:
-       Ref: https://github.com/stolostron/deploy/blob/master/hack/cleanup-managed-cluster.sh
-
-    3. Run the script:
-         ./cleanup-managed-cluster.sh
-
-    4. Verify both namespaces are removed:
-         oc get ns | grep open-cluster-management-agent
-
-2.3 Remove a Cluster in ACM 2.7
--------------------------------
-Resolving Problem: Namespace remains after deleting a cluster. Complete the 
-following steps to remove the namespace manually:
-
-1. Produce a list of remaining resources in the <cluster_name> namespace:
-     oc api-resources --verbs=list --namespaced -o name | grep -E '^secrets|^serviceaccounts|^managedclusteraddons|^roles|^rolebindings|^manifestworks|^leases|^managedclusterinfo|^appliedmanifestworks|^clusteroauths' | xargs -n 1 oc get --show-kind --ignore-not-found -n <cluster_name>
-
-2. Delete each identified resource on the list that does not have a status of Delete (replace cluster_name with the actual namespace):
-     oc edit <resource_kind> <resource_name> -n <namespace>
-     - Locate the finalizer attribute in the metadata.
-     - Delete the non-Kubernetes finalizers by using the vi editor `dd` command.
-     - Save the list and exit vi with `:wq`.
-
-3. Delete the namespace:
-     oc delete ns <cluster-name>
-
-2.4 Backing Up Labels & Policies Before Detaching
--------------------------------------------------
-Ref: https://open-cluster-management.io/docs/concepts/cluster-inventory/managedcluster/#:~:text=To%20be%20specific%2C%20the%20cluster%20has%20a,%2D%20effect%3A%20NoSelect%20key%3A%20cluster.open%2Dcluster%2Dmanagement.io%2Funavailable%20timeAdded%3A%20'2022%2D02%2D21T08%3A11%3A54Z'
-
-Detach Workflow:
-  1. Detach the managed cluster using the ACM UI.
-  2. Note: Labels will be gone after detaching.
-  3. Export labels before detaching (Extract labels into JSON/YAML):
-       oc get managedcluster <cluster-name> -o jsonpath='{.metadata.labels}' > cluster-labels.json
-  4. Export policies & governance bindings:
-       oc get policies.policy.open-cluster-management.io -A -o yaml > all-policies.yaml
-       oc get policyautomations.policy.open-cluster-management.io -A -o yaml > all-policy-automations.yaml
-       oc get placementbindings.policy.open-cluster-management.io -A -o yaml > all-placement-bindings.yaml
-       oc get placements.apps.open-cluster-management.io -A -o yaml > all-placements.yaml
-
-5. Extract Embedded Configuration Templates Directly:
-   ACM Policies wrap other Kubernetes resource templates (e.g., ConfigurationPolicy, CertificatePolicy).
-   To extract underlying ConfigurationPolicy objects defining actual cluster state:
-     oc get configurationpolicies.policy.open-cluster-management.io -A -o yaml > all-configuration-policies.yaml
-
-
--------------------------------------------------------------------------------
-3. ACM NAMESPACES REFERENCE
--------------------------------------------------------------------------------
-
-Checking ACM namespaces:
-  oc get namespaces | grep ^open-clus
-  open-cluster-management-addon-observability        Active   15h
-  open-cluster-management-agent                      Active   15h
-  open-cluster-management-agent-addon                Active   15h
-  open-cluster-management-policies                   Active   15h
-
-=====================================================================================================
-NAMESPACE                              PURPOSE / FUNCTION                               CORE COMPONENTS
-=====================================================================================================
-open-cluster-management-agent          Core agent communication and cluster            - Klusterlet Registration Agent
-                                       registration with the ACM Hub.                  - Klusterlet Work Agent
-
-open-cluster-management-agent-addon    Houses add-on controllers for policies,         - Config Policy Controller
-                                       search indexing, and application deployment.   - Governance Policy Framework
-                                                                                       - Search Collector
-                                                                                       - Application Manager
-
-open-cluster-management-policies       Holds replicated policy definitions sent from    - Policy CRDs & Local 
-                                       the Hub and local compliance status.            - Compliance Status Objects
-
-open-cluster-management-observability  (Optional) Collects and forwards cluster        - Thanos Sidecar / Metrics Collector
-                                       metrics to the ACM Hub Observability stack.
-
-open-cluster-management-iam-addon      (Optional) Enforces and monitors IAM and        - Cert Policy Controller
-                                       certificate compliance policies.                - IAM Policy Controller
-=====================================================================================================
-
-Note on open-cluster-management-policies:
-  The open-cluster-management-policies namespace is automatically created on the 
-  managed cluster when you deploy Governance Policies from the ACM Hub to that 
-  managed cluster.
-  
-  Unlike the agent namespaces (open-cluster-management-agent and open-cluster-management-agent-addon),
-  which store software code and controllers running the ACM agent, 
-  open-cluster-management-policies is purely a data/resource namespace.
-
-Architecture Flow:
-  Hub Cluster (Central)                       Managed Cluster (Target)
-  ─────────────────────                       ────────────────────────
-  Creates Policy Object ──────( ACM Sync )───> Stored in "open-cluster-management-policies"
-                                                           │
-                                                           ▼
-                                               Evaluated by Agent running in 
-                                               "open-cluster-management-agent-addon"
-
-
--------------------------------------------------------------------------------
-4. OPERATOR DEPLOYMENT VIA ACM GOVERNANCE (GITOPS EXAMPLE)
--------------------------------------------------------------------------------
-
-References & Examples:
-  - https://role.rhu.redhat.com/rol/app/courses/do0015l-2.13/pages/ch01s04
-  - https://github.com/ebeaudoi/deploy-ocp-operators/tree/main/gitops/acm-clusterset
-
-Step 1: Ensure User Has Cluster-Admin Privileges
-------------------------------------------------
-  oc adm groups new cluster-admins
-  oc adm groups add-users cluster-admins admin
-
-Step 2: Create Governance Project
----------------------------------
-  oc new-project gitops-configure
-
-Step 3: Configure ACM Cluster Set & Bindings
---------------------------------------------
-  1. Go to Infrastructure -> Clusters, select "Cluster sets" tab, click "Create cluster set".
-  2. Set name to "gitops-configure" and click Create.
-  3. Click "Manage resource assignments", select target clusters, click Review, and Save.
-  4. Bind cluster set to namespace: Actions -> Edit namespace bindings.
-  5. Select "gitops-configure" namespace and click Save.
-
-Step 4: Manifest Files Setup
-----------------------------
-Directory Contents:
-  - ca-bundle.yaml
-  - cluster-role-binding.yaml
-  - gitops-operator.yaml
-  - policy-generator.yaml
-  - argocd-configuration.yaml
-
-Manifest Contents:
+# Red Hat Advanced Cluster Management (ACM) Notes
 
 ---
-### argocd-configuration.yaml
+
+## 1. Tool Installation & Setup
+
+### 1.1 Install Kustomize
+* **Reference:** [Kustomize Binaries Installation](https://kubectl.docs.kubernetes.io/installation/kustomize/binaries/)
+* **Command:**
+  ```bash
+  curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+  ```
+
+### 1.2 Install PolicyGenerator
+* **Reference:** [PolicyGenerator Plugin Installation](https://github.com/stolostron/policy-generator-plugin#installation)
+* **Download:** [PolicyGenerator v1.19.0 Release](https://github.com/open-cluster-management-io/policy-generator-plugin/releases/tag/v1.19.0)
+* **Commands:**
+  ```bash
+  chmod +x linux-amd64-PolicyGenerator
+  mv linux-amd64-PolicyGenerator ${HOME}/.config/kustomize/plugin/policy.open-cluster-management.io/v1/policygenerator/PolicyGenerator
+  # Alternatively, copy to system path:
+  sudo cp linux-amd64-PolicyGenerator /usr/local/bin/PolicyGenerator
+  ```
+
+---
+
+## 2. Cluster Removal & Detachment Procedures
+
+### 2.1 Hub Self-Management Warning Note
+> **Warning:** If you attempt to detach the hub cluster (named `local-cluster`), be aware that the default setting of `disableHubSelfManagement` is `false`. This setting causes the hub cluster to reimport and manage itself when it is detached and reconciles the `MultiClusterHub` controller. It might take hours for the hub cluster to complete the detachment process and reimport.
+
+### 2.2 Remove a Cluster in ACM 2.1
+
+* **Remove via Command Line:**
+  ```bash
+  oc delete managedcluster $CLUSTER_NAME
+  ```
+
+* **Remove via Web Console:**
+  1. From the navigation menu, navigate to **Infrastructure > Clusters**.
+  2. Select the option menu (`⋮`) beside the cluster you want to remove.
+  3. Select **Destroy cluster** or **Detach cluster**.
+
+* **Remove Remaining Resources After Removal:**
+  1. Verify active agent namespaces:
+     ```bash
+     oc get ns | grep open-cluster-management-agent
+     ```
+     *Expected output:*
+     ```text
+     open-cluster-management-agent         Active   10m
+     open-cluster-management-agent-addon   Active   10m
+     ```
+  2. Download the cleanup script from the [stolostron/deploy GitHub repository](https://github.com/stolostron/deploy/blob/master/hack/cleanup-managed-cluster.sh).
+  3. Run the script:
+     ```bash
+     ./cleanup-managed-cluster.sh
+     ```
+  4. Confirm that both namespaces are completely removed:
+     ```bash
+     oc get ns | grep open-cluster-management-agent
+     ```
+
+### 2.3 Remove a Cluster in ACM 2.7
+If namespaces remain stuck after deleting a cluster, follow these steps to clear resources manually:
+
+1. List all remaining resources inside the `<cluster_name>` namespace:
+   ```bash
+   oc api-resources --verbs=list --namespaced -o name | grep -E '^secrets|^serviceaccounts|^managedclusteraddons|^roles|^rolebindings|^manifestworks|^leases|^managedclusterinfo|^appliedmanifestworks|^clusteroauths' | xargs -n 1 oc get --show-kind --ignore-not-found -n <cluster_name>
+   ```
+
+2. For each identified resource that does not show a status of `Delete`, remove non-Kubernetes finalizers:
+   ```bash
+   oc edit <resource_kind> <resource_name> -n <namespace>
+   ```
+   * Locate the `finalizers` attribute under `metadata`.
+   * Delete the non-Kubernetes finalizers (e.g., using `dd` in Vim).
+   * Save and exit (`:wq`).
+
+3. Delete the namespace:
+   ```bash
+   oc delete ns <cluster-name>
+   ```
+
+### 2.4 Backing Up Labels & Policies Before Detaching
+* **Reference:** [OpenShift Cluster Inventory - ManagedCluster](https://open-cluster-management.io/docs/concepts/cluster-inventory/managedcluster/#:~:text=To%20be%20specific%2C%20the%20cluster%20has%20a,%2D%20effect%3A%20NoSelect%20key%3A%20cluster.open%2Dcluster%2Dmanagement.io%2Funavailable%20timeAdded%3A%20'2022%2D02%2D21T08%3A11%3A54Z')
+
+> **Note:** Labels associated with the cluster are deleted upon detachment. Export labels before initiating detachment.
+
+1. **Export Labels:**
+   ```bash
+   oc get managedcluster <cluster-name> -o jsonpath='{.metadata.labels}' > cluster-labels.json
+   ```
+
+2. **Export Governance Policies & Placements:**
+   ```bash
+   # Export Policies
+   oc get policies.policy.open-cluster-management.io -A -o yaml > all-policies.yaml
+
+   # Export Policy Automations (Ansible integrations)
+   oc get policyautomations.policy.open-cluster-management.io -A -o yaml > all-policy-automations.yaml
+
+   # Export Governance Placements & PlacementBindings
+   oc get placementbindings.policy.open-cluster-management.io -A -o yaml > all-placement-bindings.yaml
+   oc get placements.apps.open-cluster-management.io -A -o yaml > all-placements.yaml
+   ```
+
+3. **Extract Embedded Configuration Templates Directly:**
+   ACM Policies wrap underlying Kubernetes resource templates (such as `ConfigurationPolicy` or `CertificatePolicy`). To extract these underlying objects directly:
+   ```bash
+   oc get configurationpolicies.policy.open-cluster-management.io -A -o yaml > all-configuration-policies.yaml
+   ```
+
+---
+
+## 3. ACM Namespaces Reference
+
+To view active ACM namespaces:
+```bash
+oc get namespaces | grep ^open-clus
+```
+
+*Example Output:*
+```text
+open-cluster-management-addon-observability        Active   15h
+open-cluster-management-agent                      Active   15h
+open-cluster-management-agent-addon                Active   15h
+open-cluster-management-policies                   Active   15h
+```
+
+### Namespace Breakdown
+
+| Namespace | Purpose / Function | Core Components |
+| :--- | :--- | :--- |
+| `open-cluster-management-agent` | Core agent communication and cluster registration with the ACM Hub. | - Klusterlet Registration Agent<br>- Klusterlet Work Agent |
+| `open-cluster-management-agent-addon` | Houses add-on controllers for policies, search indexing, and application deployment. | - Config Policy Controller<br>- Governance Policy Framework<br>- Search Collector<br>- Application Manager |
+| `open-cluster-management-policies` | Holds replicated policy definitions sent from the Hub and local compliance status. | - Policy CRDs<br>- Local Compliance Status Objects |
+| `open-cluster-management-observability` | *(Optional)* Collects and forwards cluster metrics to the ACM Hub Observability stack. | - Thanos Sidecar / Metrics Collector |
+| `open-cluster-management-iam-addon` | *(Optional)* Enforces and monitors IAM and certificate compliance policies. | - Cert Policy Controller<br>- IAM Policy Controller |
+
+### Details on `open-cluster-management-policies`
+The `open-cluster-management-policies` namespace is automatically created on a managed cluster when you deploy Governance Policies from the ACM Hub to that cluster.
+
+> **Note:** Unlike `open-cluster-management-agent` and `open-cluster-management-agent-addon` (which store binary/controller software running the ACM agent), `open-cluster-management-policies` serves purely as a **data/resource namespace**.
+
+```text
+Hub Cluster (Central)                       Managed Cluster (Target)
+─────────────────────                       ────────────────────────
+Creates Policy Object ──────( ACM Sync )───> Stored in "open-cluster-management-policies"
+                                                         │
+                                                         ▼
+                                             Evaluated by Agent running in 
+                                             "open-cluster-management-agent-addon"
+```
+
+---
+
+## 4. Operator Deployment via ACM Governance (GitOps Example)
+
+* **References & Examples:**
+  * [Red Hat Training Course - DO0015L 2.13](https://role.rhu.redhat.com/rol/app/courses/do0015l-2.13/pages/ch01s04)
+  * [deploy-ocp-operators GitHub Repository](https://github.com/ebeaudoi/deploy-ocp-operators/tree/main/gitops/acm-clusterset)
+
+### Step 1: Ensure User Has `cluster-admin` Privileges
+```bash
+oc adm groups new cluster-admins
+oc adm groups add-users cluster-admins admin
+```
+
+### Step 2: Create Governance Project
+```bash
+oc new-project gitops-configure
+```
+
+### Step 3: Configure ACM Cluster Set & Bindings
+1. In the ACM Console, navigate to **Infrastructure → Clusters**, select the **Cluster sets** tab, and click **Create cluster set**.
+2. Set the name to `gitops-configure` and click **Create**.
+3. Click **Manage resource assignments**, select the target clusters, click **Review**, and click **Save**.
+4. Bind the cluster set to the namespace by clicking **Actions → Edit namespace bindings**.
+5. Select the `gitops-configure` namespace and click **Save**.
+
+### Step 4: Manifest Files Setup
+
+Required files in your working directory:
+* `ca-bundle.yaml`
+* `cluster-role-binding.yaml`
+* `gitops-operator.yaml`
+* `policy-generator.yaml`
+* `argocd-configuration.yaml`
+
+#### File Definitions:
+
+`argocd-configuration.yaml`
+```yaml
 apiVersion: argoproj.io/v1beta1
 kind: ArgoCD
 metadata:
@@ -246,9 +249,10 @@ spec:
           cpu: 250m
           memory: 128Mi
     provider: dex
+```
 
----
-### ca-bundle.yaml
+`ca-bundle.yaml`
+```yaml
 kind: ConfigMap
 apiVersion: v1
 metadata:
@@ -256,9 +260,10 @@ metadata:
   namespace: openshift-gitops
   labels:
     config.openshift.io/inject-trusted-cabundle: 'true'
+```
 
----
-### cluster-role-binding.yaml
+`cluster-role-binding.yaml`
+```yaml
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
@@ -271,9 +276,10 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: cluster-admin
+```
 
----
-### gitops-operator.yaml
+`gitops-operator.yaml`
+```yaml
 apiVersion: policy.open-cluster-management.io/v1beta1
 kind: OperatorPolicy
 metadata:
@@ -291,9 +297,10 @@ spec:
     startingCSV: openshift-gitops-operator.v1.21.1
   upgradeApproval: Automatic
   versions: []
+```
 
----
-### policy-generator.yaml
+`policy-generator.yaml`
+```yaml
 apiVersion: policy.open-cluster-management.io/v1
 kind: PolicyGenerator
 metadata:
@@ -316,20 +323,21 @@ policies:
       - path: gitops-operator.yaml
       - path: cluster-role-binding.yaml
       - path: argocd-configuration.yaml
+```
 
-Step 5: Apply Policy & Monitor Remediation
-------------------------------------------
-1. Generate and apply policies:
-     PolicyGenerator policy-generator.yaml | oc apply -f -
-2. Switch to RHACM web console -> Governance -> Policies tab.
-3. Wait for all clusters to become compliant (up to 5 minutes).
+### Step 5: Apply Policy & Monitor Remediation
+1. Generate and apply governance policies:
+   ```bash
+   PolicyGenerator policy-generator.yaml | oc apply -f -
+   ```
+2. Navigate to the ACM web console: **Governance → Policies**.
+3. Monitor status until all targeted clusters reach **Compliant** state (typically takes up to 5 minutes).
 
-Step 6: Import Clusters into Argo CD
-------------------------------------
-Apply the registration manifest (`gitops-register.yaml`):
+### Step 6: Import Clusters into Argo CD
+To register target clusters with Argo CD, apply `gitops-register.yaml`:
 
-### gitops-register.yaml
----
+`gitops-register.yaml`
+```yaml
 apiVersion: cluster.open-cluster-management.io/v1beta2
 kind: ManagedClusterSetBinding
 metadata:
@@ -365,38 +373,47 @@ spec:
     apiVersion: cluster.open-cluster-management.io/v1beta1
     name: gitops-configure
     namespace: openshift-gitops
+```
 
-Command:
-  oc apply -f gitops-register.yaml
+Apply the registration manifest:
+```bash
+oc apply -f gitops-register.yaml
+```
 
-Output:
-  managedclustersetbinding.cluster.open-cluster-management.io/gitops-configure created
-  placement.cluster.open-cluster-management.io/gitops-configure created
-  gitopscluster.apps.open-cluster-management.io/gitops-configure created
+*Expected output:*
+```text
+managedclustersetbinding.cluster.open-cluster-management.io/gitops-configure created
+placement.cluster.open-cluster-management.io/gitops-configure created
+gitopscluster.apps.open-cluster-management.io/gitops-configure created
+```
 
+---
 
--------------------------------------------------------------------------------
-5. USEFUL OPERATOR DISCOVERY COMMANDS
--------------------------------------------------------------------------------
+## 5. Useful Operator Discovery Commands
 
-To find operator CSV, channel, catalog source, startingCSV details:
+To inspect CSVs, subscription channels, catalog sources, and package metadata for operators:
 
-Commands:
-  oc get packagemanifests openshift-gitops-operator -n openshift-marketplace -o yaml
-  # or
-  oc get packagemanifests -n openshift-marketplace
+```bash
+# Query package details for the OpenShift GitOps operator
+oc get packagemanifests openshift-gitops-operator -n openshift-marketplace -o yaml
 
-Filtering relevant fields:
-  oc get packagemanifests openshift-gitops-operator -n openshift-marketplace -o yaml | grep -i -E "channel|source:|sourceNamespace|startingCSV|namespace:"
+# List all available package manifests
+oc get packagemanifests -n openshift-marketplace
+```
 
-Example output:
+Filter specific subscription fields (`channel`, `source`, `startingCSV`):
+```bash
+oc get packagemanifests openshift-gitops-operator -n openshift-marketplace -o yaml | grep -i -E "channel|source:|sourceNamespace|startingCSV|namespace:"
+```
+
+*Example Output:*
+```yaml
     catalog-namespace: openshift-marketplace
   namespace: openshift-marketplace
   catalogSource: redhat-operators
   catalogSourceNamespace: openshift-marketplace
   channels:
         operatorframework.io/suggested-namespace: openshift-gitops-operator
-        operatorframework.io/suggested-namespace: openshift-gitops-operator
         ...
   defaultChannel: latest
-===============================================================================
+```
