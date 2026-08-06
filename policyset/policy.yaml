@@ -1,0 +1,30 @@
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  name: policy-web-terminal-install
+  namespace: global-policies
+  annotations:
+    policy.open-cluster-management.io/categories: SystemAndCommunicationsProtection
+    policy.open-cluster-management.io/standards: NIST SP 800-53
+    policy.open-cluster-management.io/controls: AC-3 Access Control
+spec:
+  disabled: false
+  remediationAction: enforce
+  policy-templates:
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1beta1
+        kind: OperatorPolicy
+        metadata:
+          name: install-operator
+        spec:
+          remediationAction: enforce
+          severity: critical
+          complianceType: musthave
+          upgradeApproval: Automatic
+          subscription:
+            name: web-terminal
+            namespace: openshift-operators
+            channel: fast
+            source: redhat-operators
+            sourceNamespace: openshift-marketplace
+            startingCSV: web-terminal.v1.16.1

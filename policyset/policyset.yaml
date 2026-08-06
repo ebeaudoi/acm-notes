@@ -1,0 +1,9 @@
+apiVersion: policy.open-cluster-management.io/v1beta1
+kind: PolicySet
+metadata:
+  name: global-policies
+  namespace: global-policies
+spec:
+  description: "Global policy set for web terminal operator deployment"
+  policies:
+    - policy-web-terminal-install
