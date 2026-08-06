@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: 'https://github.com/your-org/rhacm-governance-repo.git'
+    repoURL: 'git@github.com:ebeaudoi/acm-notes.git'
     targetRevision: HEAD
     path: governance/base
   destination:
