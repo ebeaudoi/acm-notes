@@ -1,0 +1,21 @@
+apiVersion: policy.open-cluster-management.io/v1
+kind: PolicyGenerator
+metadata:
+  name: global-policies
+policyDefaults:
+  namespace: global-policies
+  remediationAction: enforce
+  severity: critical
+  placement:
+    name: global-policies-placement
+    clusterSets:
+      - gitops-configure
+policySets:
+  - name: global-policies
+    description: "Global policy set for foundational cluster configurations"
+    policies:
+      - policy-web-terminal-install
+policies:
+  - name: policy-web-terminal-install
+    manifests:
+      - path: manifests/web-terminal-subscription.yaml
