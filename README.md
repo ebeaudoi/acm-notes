@@ -22,6 +22,58 @@
   sudo cp linux-amd64-PolicyGenerator /usr/local/bin/PolicyGenerator
   ```
 
+### 1.3 Add a Kustomize Plugin to OpenShift GitOps in RHOCP4
+* **Article:** Add a Kustomize Plugin to OpenShift GitOps in RHOCP4
+* **Reference:** [https://access.redhat.com/solutions/6997069](https://access.redhat.com/solutions/6997069)
+* **Title:** In order to make the Kustomize plugin available to OpenShift GitOps, it should be injected in the OpenShift GitOps repo server pod.
+
+#### Resolution
+In order to make the Kustomize plugin available to OpenShift GitOps, it should be injected in the OpenShift GitOps repo server pod.
+
+Create a patch file for the default ArgoCD instance running in the namespace `openshift-gitops` with the configuration below:
+
+1. Define an environment variable for the Kustomize plugin home directory.
+2. Define an init container to copy the Kustomize plugin from a custom container image which contains the plugin.
+3. Define a volume which is shared by both the init container and the repo server container.
+
+`argo_patch.yaml`:
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: ArgoCD
+metadata:
+  name: openshift-gitops
+  namespace: openshift-gitops
+spec:
+  repo:
+    env:
+    - name: KUSTOMIZE_PLUGIN_HOME                                             # ---> 1
+      value: /etc/kustomize/plugin                                                    
+    initContainers:                                                           # ---> 2
+    - args:
+      - -c
+      - cp /etc/kustomize/plugin/my-plugin /kustomize-plugin
+      command:
+      - /bin/bash
+      image: registry.example.com/kustomize/kustomize-plugin:latest
+      name: kustomize-plugin-install
+      volumeMounts:
+      - mountPath: /kustomize-plugin
+        name: kustomize-plugin-dir
+    volumeMounts:
+    - mountPath: /etc/kustomize/plugin
+      name: kustomize-plugin-dir
+    volumes:                                                                  # ---> 3
+    - emptyDir: {}
+      name: kustomize-plugin-dir
+  kustomizeBuildOptions: --enable-alpha-plugins
+```
+
+Apply the patch and wait for the `openshift-gitops-repo-server` pod to get recreated with the init container which copies the Kustomize plugin to the repo server container:
+
+```bash
+oc apply -f argo_patch.yaml
+```
+
 ---
 
 ## 2. Cluster Removal & Detachment Procedures
